@@ -183,7 +183,7 @@ export async function sendImageMessage(opts: {
   imageAesKey: string;
   encryptQueryParam: string;
   fileSize: number;
-}): Promise<{ clientId: string }> {
+}): Promise<{ clientId: string; serverMsgId?: string }> {
   const clientId = `cc-${crypto.randomUUID()}`;
   const items: MessageItem[] = [];
 

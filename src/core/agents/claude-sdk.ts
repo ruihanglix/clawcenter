@@ -62,8 +62,8 @@ export class ClaudeSDKAdapter implements AgentAdapter {
         prompt: messages(),
         options: {
           model: (this.config.model as string) ?? "sonnet",
-          baseTools: [{ preset: "default" }],
-          deniedTools: ["AskUserQuestion"],
+          tools: { type: "preset" as const, preset: "claude_code" as const },
+          disallowedTools: ["AskUserQuestion"],
           cwd: this.config.cwd ?? process.cwd(),
           env: { ...process.env, ...(this.config.env ?? {}) },
           abortController: new AbortController(),

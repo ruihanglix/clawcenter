@@ -6,6 +6,27 @@
   "bin": {
     "clawcenter": "./bin/clawcenter.js"
   },
+  "files": [
+    "dist",
+    "bin",
+    "web/dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruihanglix/clawcenter.git"
+  },
+  "homepage": "https://github.com/ruihanglix/clawcenter#readme",
+  "bugs": {
+    "url": "https://github.com/ruihanglix/clawcenter/issues"
+  },
+  "keywords": [
+    "wechat",
+    "ai",
+    "agent",
+    "dispatcher",
+    "claude",
+    "router"
+  ],
   "scripts": {
     "build": "tsc && vite build --config web/vite.config.ts",
     "build:server": "tsc",
@@ -14,6 +35,7 @@
     "dev:worker": "tsx src/index.ts start --worker",
     "start": "node dist/index.js start",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
