@@ -179,15 +179,9 @@ export class Dispatcher extends EventEmitter {
       && previousStickyAgent !== route.agentId;
 
     // Update inbound message record with proper session/agent info
-    this.store.recordMessage({
-      wechat_msg_id: msg.messageId,
-      session_id: route.sessionId,
-      agent_id: route.agentId,
-      wechat_id: msg.wechatAccountId,
-      user_id: msg.fromUserId,
-      direction: "inbound",
-      content: msg.text,
-    });
+    if (msg.messageId) {
+      this.store.updateMessageRouting(msg.messageId, route.sessionId, route.agentId);
+    }
 
     // Auto-label session from first message
     this.store.setSessionLabelIfEmpty(route.sessionId, route.body.slice(0, 20));

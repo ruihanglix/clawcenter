@@ -660,12 +660,20 @@ export class Store {
     return this.db.exec("SELECT last_insert_rowid()")[0]?.values[0]?.[0] as number ?? 0;
   }
 
+  updateMessageRouting(wechatMsgId: string, sessionId: string, agentId: string): void {
+    run(this.db,
+      `UPDATE messages SET session_id = ?, agent_id = ? WHERE wechat_msg_id = ? AND direction = 'inbound' AND agent_id = ''`,
+      [sessionId, agentId, wechatMsgId],
+    );
+    this.schedulePersist();
+  }
+
   findMessageByClientId(clientId: string): Message | null {
     return queryOne<Message>(this.db, "SELECT * FROM messages WHERE client_id = ?", [clientId]);
   }
 
   findMessageByWechatMsgId(wechatMsgId: string): Message | null {
-    return queryOne<Message>(this.db, "SELECT * FROM messages WHERE wechat_msg_id = ?", [wechatMsgId]);
+    return queryOne<Message>(this.db, "SELECT * FROM messages WHERE wechat_msg_id = ? ORDER BY id DESC LIMIT 1", [wechatMsgId]);
   }
 
   findOutboundMessageByContent(wechatId: string, userId: string, contentPrefix: string): Message | null {
