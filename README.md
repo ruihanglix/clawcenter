@@ -29,6 +29,10 @@ ClawCenter 是一个中央路由器，连接你的微信和多个 AI Agent（Cla
 
 <img src="docs/img/im-help.jpg" width="300" />
 
+**在微信里给 Agent 发任务，直接完成工作：**
+
+<img src="docs/img/im-task.jpg" width="300" />
+
 **Web 管理面板统一管理所有 Agent：**
 
 <img src="docs/img/web-agents.png" width="700" />
