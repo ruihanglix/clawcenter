@@ -15,35 +15,11 @@ ClawCenter 是一个中央路由器，连接你的微信和多个 AI Agent（Cla
 - **零配置起步**：启动即用，所有设置在 Web 管理面板中完成
 - **权限控制**：矩阵视图一目了然，配置每个微信账号可访问哪些 Agent
 
-## 功能预览
-
-**用 `#标签` 在不同 Agent 之间自由切换，引用回复自动接续对话：**
-
-<img src="docs/img/im-quote.jpg" width="300" />
-
-**查看可用 Agent、切换默认 Agent、查看/切换模型：**
-
-<img src="docs/img/im-modelselect.jpg" width="300" />
-
-**发送 `/help` 查看所有系统命令：**
-
-<img src="docs/img/im-help.jpg" width="300" />
-
-**在微信里给 Agent 发任务，直接完成工作：**
-
-<img src="docs/img/im-task.jpg" width="300" />
-
-**Web 管理面板统一管理所有 Agent：**
-
-<img src="docs/img/web-agents.png" width="700" />
-
 ## 安装
 
 ```bash
 npm install -g clawcenter
 ```
-
-需要 Node.js 22 或更高版本。
 
 ## 快速开始
 
@@ -93,6 +69,28 @@ Agent 会回复：
 ```
 
 直接引用这条回复继续追问，无需再打 `#claude`。
+
+## 功能预览
+
+**用 `#标签` 在不同 Agent 之间自由切换，引用回复自动接续对话：**
+
+<img src="docs/img/im-quote.jpg" width="300" />
+
+**查看可用 Agent、切换默认 Agent、查看/切换模型：**
+
+<img src="docs/img/im-modelselect.jpg" width="300" />
+
+**发送 `/help` 查看所有系统命令：**
+
+<img src="docs/img/im-help.jpg" width="300" />
+
+**在微信里给 Agent 发任务，直接完成工作：**
+
+<img src="docs/img/im-task.jpg" width="300" />
+
+**Web 管理面板统一管理所有 Agent：**
+
+<img src="docs/img/web-agents.png" width="700" />
 
 ## 微信里的用法
 
