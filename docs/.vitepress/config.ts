@@ -87,17 +87,17 @@ export default defineConfig({
   themeConfig: {
     logo: "/logo.svg",
     socialLinks: [
-      { icon: "github", link: "https://github.com/nicepkg/clawcenter" },
+      { icon: "github", link: "https://github.com/ruihanglix/clawcenter" },
     ],
     search: {
       provider: "local",
     },
     editLink: {
-      pattern: "https://github.com/nicepkg/clawcenter/edit/main/docs/:path",
+      pattern: "https://github.com/ruihanglix/clawcenter/edit/main/docs/:path",
       text: "Edit this page on GitHub",
     },
     footer: {
-      message: "Released under the MIT License.",
+      message: "Released under the Apache 2.0 License.",
       copyright: "Copyright © 2025-present ClawCenter Contributors",
     },
   },

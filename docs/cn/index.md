@@ -11,7 +11,7 @@ hero:
       link: /cn/02-quickstart
     - theme: alt
       text: GitHub
-      link: https://github.com/nicepkg/clawcenter
+      link: https://github.com/ruihanglix/clawcenter
 
 features:
   - icon: 🏷️
