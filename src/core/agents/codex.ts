@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { extname, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentAdapter, AgentConfig, ModelInfo, SendParams, SendResult } from "./adapter.js";
 
@@ -7,6 +9,12 @@ const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDERR_HEAD = 4 * 1024;
 const MAX_STDERR_TAIL = 6 * 1024;
 const DEFAULT_PERMISSION_MODE = "dangerously-skip-permissions";
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+const IMAGE_PATH_PATTERNS = [
+  /!\[[^\]]*]\(([^)]+)\)/g,
+  /file:\/\/[^\s)"'`]+/g,
+  /(?:^|[\s("'`])((?:\.{1,2}\/|~\/|\/)[^\s)"'`]+\.(?:png|jpe?g|gif|webp|bmp))/gi,
+];
 
 function clampTimeout(ms: unknown): number {
   const n = typeof ms === "number" ? ms : 0;
@@ -73,6 +81,88 @@ function parseJsonLine(line: string): Record<string, unknown> | null {
   }
 }
 
+function stripEnclosingPunctuation(value: string): string {
+  let normalized = value.trim();
+  normalized = normalized.replace(/^[<"'`([{]+/, "");
+  normalized = normalized.replace(/[>"'`)\]},;:.!?]+$/, "");
+  return normalized;
+}
+
+function normalizeImagePath(candidate: string, workDir: string): string | null {
+  const trimmed = stripEnclosingPunctuation(candidate);
+  if (!trimmed || trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return null;
+  }
+
+  let localPath = trimmed;
+  if (localPath.startsWith("file://")) {
+    try {
+      localPath = decodeURIComponent(new URL(localPath).pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  if (localPath.startsWith("~/")) {
+    const homeDir = process.env.HOME;
+    if (!homeDir) return null;
+    localPath = resolve(homeDir, localPath.slice(2));
+  } else if (!isAbsolute(localPath)) {
+    localPath = resolve(workDir, localPath);
+  }
+
+  const extension = extname(localPath).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(extension)) {
+    return null;
+  }
+
+  try {
+    return existsSync(localPath) && statSync(localPath).isFile() ? localPath : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractImagePaths(text: string, workDir: string): string[] {
+  const found = new Set<string>();
+
+  for (const pattern of IMAGE_PATH_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const candidate = match[1] ?? match[0];
+      const normalized = normalizeImagePath(candidate, workDir);
+      if (normalized) found.add(normalized);
+    }
+  }
+
+  return Array.from(found);
+}
+
+function collectImagePaths(value: unknown, workDir: string, found = new Set<string>()): string[] {
+  if (typeof value === "string") {
+    for (const imagePath of extractImagePaths(value, workDir)) {
+      found.add(imagePath);
+    }
+    return Array.from(found);
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectImagePaths(item, workDir, found);
+    }
+    return Array.from(found);
+  }
+
+  if (value && typeof value === "object") {
+    for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+      collectImagePaths(nestedValue, workDir, found);
+    }
+  }
+
+  return Array.from(found);
+}
+
 export class CodexAdapter implements AgentAdapter {
   readonly type = "codex" as const;
   readonly supportsModelSwitch = true;
@@ -119,10 +209,11 @@ export class CodexAdapter implements AgentAdapter {
     const proxy = this.config.proxy as string | undefined;
     const timeoutMs = clampTimeout(this.config.timeoutMs);
     const idleTimeoutMs = getIdleTimeoutMs(timeoutMs);
+    const workDir = this.config.cwd ?? process.cwd();
 
     const args = buildArgs(
       params.agentSessionId,
-      this.config.cwd ?? process.cwd(),
+      workDir,
       this.config.permissionMode as string | undefined,
       this.config.model as string | undefined,
     );
@@ -145,7 +236,7 @@ export class CodexAdapter implements AgentAdapter {
 
     return new Promise<SendResult>((resolve, reject) => {
       const proc = spawn(cliPath, args, {
-        cwd: this.config.cwd ?? process.cwd(),
+        cwd: workDir,
         stdio: ["pipe", "pipe", "pipe"],
         env,
       });
@@ -159,6 +250,7 @@ export class CodexAdapter implements AgentAdapter {
       let sessionId: string | undefined;
       let completed = false;
       const chunks: string[] = [];
+      const mediaPaths = new Set<string>();
 
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       let idleTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -251,12 +343,21 @@ export class CodexAdapter implements AgentAdapter {
           if (!item) return;
           const itemType = item.type as string;
 
+          if (itemType === "command_execution") {
+            for (const mediaPath of collectImagePaths(item, workDir)) {
+              mediaPaths.add(mediaPath);
+            }
+          }
+
           if (itemType === "agent_message" && type === "item.completed") {
             const text = item.text as string | undefined;
             if (text) {
               accumulated += (accumulated ? "\n\n" : "") + text;
               chunks.push(text);
               params.onStream?.(text);
+            }
+            for (const mediaPath of collectImagePaths(item, workDir)) {
+              mediaPaths.add(mediaPath);
             }
             return;
           }
@@ -277,10 +378,12 @@ export class CodexAdapter implements AgentAdapter {
         if (!rlClosed || !childClosed) return;
         clearTimers();
         this.processes.delete(params.sessionId);
+        const resolvedMediaUrls = mediaPaths.size > 0 ? Array.from(mediaPaths) : undefined;
         if (completed) {
           resolve({
             text: accumulated || "(No response)",
             agentSessionId: sessionId,
+            mediaUrls: resolvedMediaUrls,
           });
           return;
         }
@@ -305,6 +408,7 @@ export class CodexAdapter implements AgentAdapter {
         resolve({
           text: accumulated || "(No response)",
           agentSessionId: sessionId,
+          mediaUrls: resolvedMediaUrls,
         });
       };
 
