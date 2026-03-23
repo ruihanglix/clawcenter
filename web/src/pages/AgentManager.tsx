@@ -515,7 +515,10 @@ export function AgentManager() {
   const [formCwd, setFormCwd] = useState("");
   const [formModel, setFormModel] = useState("");
   const [formUrl, setFormUrl] = useState("");
+  const [formPermissionMode, setFormPermissionMode] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const formHasPermissionMode = formType === "claude-code" || formType === "codex" || formType === "codebuddy" || formType === "cursor-agent";
 
   const refresh = () => listAgents().then(setAgents).catch(() => {});
   useEffect(() => { refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); }, []);
@@ -528,6 +531,7 @@ export function AgentManager() {
       if (formCwd) config.cwd = formCwd;
       if (formModel) config.model = formModel;
       if (formUrl) config.url = formUrl;
+      if (formHasPermissionMode && formPermissionMode) config.permissionMode = formPermissionMode;
 
       await createAgent({
         id: formId,
@@ -536,7 +540,7 @@ export function AgentManager() {
         config,
         auto_start: true,
       });
-      setFormId(""); setFormDisplayName(""); setFormCwd(""); setFormModel(""); setFormUrl("");
+      setFormId(""); setFormDisplayName(""); setFormCwd(""); setFormModel(""); setFormUrl(""); setFormPermissionMode("");
       setShowAdd(false);
       refresh();
     } catch (err) { setError((err as Error).message); }
@@ -607,6 +611,16 @@ export function AgentManager() {
               </div>
             )}
           </div>
+          {formHasPermissionMode && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, color: "var(--text-dim)" }}>Permission Mode</label>
+                <select value={formPermissionMode} onChange={(e) => setFormPermissionMode(e.target.value)}>
+                  {PERMISSION_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
             <button className="primary" onClick={handleAdd}>Create & Start</button>
             <button onClick={() => setShowAdd(false)}>Cancel</button>

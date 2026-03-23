@@ -257,6 +257,17 @@ export class Dispatcher extends EventEmitter {
             }
           } catch (mediaErr) {
             console.error(`[Dispatcher] Failed to send media:`, mediaErr);
+            try {
+              if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+                await connector.sendText(msg.fromUserId, `🖼️ 图片附件发送失败，改为链接：${mediaUrl}`);
+              } else {
+                const { uploadLocalToTempUrl } = await import("./wechat/cdn.js");
+                const fallbackUrl = await uploadLocalToTempUrl(mediaUrl);
+                await connector.sendText(msg.fromUserId, `🖼️ 图片附件发送失败，改为临时链接：${fallbackUrl}`);
+              }
+            } catch (fallbackErr) {
+              console.error(`[Dispatcher] Failed to send media fallback:`, fallbackErr);
+            }
           }
         }
       }
