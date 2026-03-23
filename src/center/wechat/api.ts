@@ -222,11 +222,11 @@ export async function sendImageMessage(opts: {
 export async function getUploadUrl(opts: {
   baseUrl: string;
   token?: string | null;
-}): Promise<{ upload_url?: string; upload_param?: string }> {
+}): Promise<{ upload_url?: string; upload_param?: string; ret?: number; errcode?: number; errmsg?: string }> {
   return apiRequest(opts.baseUrl, "ilink/bot/getuploadurl", {
     body: {},
     token: opts.token,
-  }) as Promise<{ upload_url?: string; upload_param?: string }>;
+  }) as Promise<{ upload_url?: string; upload_param?: string; ret?: number; errcode?: number; errmsg?: string }>;
 }
 
 export async function getConfig(opts: {

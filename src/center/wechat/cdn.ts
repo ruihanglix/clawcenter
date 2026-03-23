@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { getUploadUrl } from "./api.js";
@@ -67,7 +68,12 @@ export async function encryptAndUploadMedia(
   // Get upload URL from API
   const uploadInfo = await getUploadUrl({ baseUrl: opts.baseUrl, token: opts.token });
   if (!uploadInfo.upload_url) {
-    throw new Error("Failed to get upload URL");
+    const suffix = [
+      uploadInfo.errmsg ? `errmsg=${uploadInfo.errmsg}` : "",
+      uploadInfo.ret !== undefined ? `ret=${uploadInfo.ret}` : "",
+      uploadInfo.errcode !== undefined ? `errcode=${uploadInfo.errcode}` : "",
+    ].filter(Boolean).join(", ");
+    throw new Error(`Failed to get upload URL${suffix ? ` (${suffix})` : ""}`);
   }
 
   // Upload encrypted data
@@ -91,6 +97,34 @@ export async function encryptAndUploadMedia(
     encryptQueryParam: result.encrypt_query_param,
     fileSize: data.length,
   };
+}
+
+export async function uploadLocalToTempUrl(
+  filePath: string,
+  uploadUrl: string = process.env.CLAWCENTER_MEDIA_FALLBACK_UPLOAD_URL || "https://0x0.st",
+): Promise<string> {
+  const escapedFilePath = shellQuote(filePath);
+  const escapedUploadUrl = shellQuote(uploadUrl);
+  return new Promise<string>((resolve, reject) => {
+    execFile("bash", ["-lc", `curl -fsS -F file=@${escapedFilePath} ${escapedUploadUrl}`], {
+      timeout: 30_000,
+    }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(`Fallback upload failed: ${stderr.trim() || err.message}`));
+        return;
+      }
+      const text = stdout.trim();
+      if (!text.startsWith("http://") && !text.startsWith("https://")) {
+        reject(new Error(`Fallback upload returned unexpected response: ${text.slice(0, 200)}`));
+        return;
+      }
+      resolve(text);
+    });
+  });
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 // ─── Download remote URL to temp file ───
