@@ -11,6 +11,21 @@ import { WorkerAgentAdapter, type WorkerSendFn } from "./worker-agent.js";
 import type { Store } from "../db/store.js";
 import { EventEmitter } from "node:events";
 
+const DEFAULT_CODEX_PERMISSION_MODE = "dangerously-skip-permissions";
+
+function normalizeAgentConfig(type: AgentType, config?: AgentConfig): AgentConfig | undefined {
+  if (type !== "codex") {
+    return config;
+  }
+
+  const next = { ...(config ?? {}) };
+  const permissionMode = typeof next.permissionMode === "string" ? next.permissionMode.trim() : "";
+  if (!permissionMode) {
+    next.permissionMode = DEFAULT_CODEX_PERMISSION_MODE;
+  }
+  return next;
+}
+
 export interface AgentManagerEvents {
   "agent:started": (agentId: string) => void;
   "agent:stopped": (agentId: string) => void;
@@ -65,11 +80,13 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent "${data.id}" already exists`);
     }
 
+    const config = normalizeAgentConfig(data.type, data.config);
+
     this.store.createAgent({
       id: data.id,
       display_name: data.displayName,
       type: data.type,
-      config: data.config,
+      config,
       node_id: data.nodeId,
     });
 
@@ -103,8 +120,12 @@ export class AgentManager extends EventEmitter {
       if (!agentData) throw new Error(`Agent "${id}" not found`);
       const newAdapter = this.createAdapter(id, agentData.display_name, agentData.type as AgentType, agentData.node_id);
       this.adapters.set(id, newAdapter);
+      const config = normalizeAgentConfig(agentData.type as AgentType, agentData.config as AgentConfig | undefined);
       try {
-        await newAdapter.start(agentData.config as AgentConfig);
+        await newAdapter.start((config ?? {}) as AgentConfig);
+        if (config !== agentData.config) {
+          this.store.updateAgent(id, { config });
+        }
         this.store.updateAgent(id, { status: "running" });
         this.emit("agent:started", id);
       } catch (err) {
@@ -119,8 +140,12 @@ export class AgentManager extends EventEmitter {
     if (adapter.status === "running") return;
 
     const agentData = this.store.getAgent(id);
+    const config = normalizeAgentConfig(agentData?.type as AgentType, (agentData?.config ?? {}) as AgentConfig);
     try {
-      await adapter.start((agentData?.config ?? {}) as AgentConfig);
+      await adapter.start((config ?? {}) as AgentConfig);
+      if (agentData && config !== agentData.config) {
+        this.store.updateAgent(id, { config });
+      }
       this.store.updateAgent(id, { status: "running" });
       this.emit("agent:started", id);
     } catch (err) {
@@ -158,7 +183,7 @@ export class AgentManager extends EventEmitter {
 
     const agentData = this.store.getAgent(id);
     if (agentData) {
-      const config = (agentData.config ?? {}) as AgentConfig;
+      const config = normalizeAgentConfig(agentData.type as AgentType, (agentData.config ?? {}) as AgentConfig) ?? {};
       config.model = model;
       this.store.updateAgent(id, { config });
     }
@@ -256,7 +281,11 @@ export class AgentManager extends EventEmitter {
       try {
         const adapter = this.createAdapter(agent.id, agent.display_name, agent.type as AgentType, agent.node_id);
         this.adapters.set(agent.id, adapter);
-        await adapter.start(agent.config as AgentConfig);
+        const config = normalizeAgentConfig(agent.type as AgentType, agent.config as AgentConfig | undefined);
+        await adapter.start((config ?? {}) as AgentConfig);
+        if (config !== agent.config) {
+          this.store.updateAgent(agent.id, { config });
+        }
         this.store.updateAgent(agent.id, { status: "running" });
         console.log(`[AgentManager] Started agent: ${agent.id} (${agent.type})`);
       } catch (err) {

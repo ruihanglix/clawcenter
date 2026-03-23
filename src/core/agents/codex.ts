@@ -6,6 +6,7 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDERR_HEAD = 4 * 1024;
 const MAX_STDERR_TAIL = 6 * 1024;
+const DEFAULT_PERMISSION_MODE = "dangerously-skip-permissions";
 
 function clampTimeout(ms: unknown): number {
   const n = typeof ms === "number" ? ms : 0;
@@ -22,18 +23,24 @@ function getIdleTimeoutMs(totalTimeoutMs: number): number {
   return totalTimeoutMs > 0 ? Math.min(idle, totalTimeoutMs) : idle;
 }
 
+function resolvePermissionMode(permissionMode?: string): string {
+  const normalized = permissionMode?.trim();
+  return normalized || DEFAULT_PERMISSION_MODE;
+}
+
 function buildArgs(
   sessionId: string | undefined,
   workDir: string,
   permissionMode?: string,
   model?: string,
 ): string[] {
+  const resolvedPermissionMode = resolvePermissionMode(permissionMode);
   const common = ["--json", "--skip-git-repo-check"];
-  const isResume = Boolean(sessionId) && permissionMode !== "plan";
+  const isResume = Boolean(sessionId) && resolvedPermissionMode !== "plan";
 
   if (isResume) {
     const args = ["exec", "resume", ...common];
-    if (permissionMode === "dangerously-skip-permissions") {
+    if (resolvedPermissionMode === "dangerously-skip-permissions") {
       args.push("--dangerously-bypass-approvals-and-sandbox");
     } else {
       args.push("--full-auto");
@@ -44,9 +51,9 @@ function buildArgs(
   }
 
   const args = ["exec", ...common, "--cd", workDir];
-  if (permissionMode === "dangerously-skip-permissions") {
+  if (resolvedPermissionMode === "dangerously-skip-permissions") {
     args.push("--dangerously-bypass-approvals-and-sandbox");
-  } else if (permissionMode === "plan") {
+  } else if (resolvedPermissionMode === "plan") {
     args.push("--sandbox", "read-only");
   } else {
     args.push("--full-auto");
