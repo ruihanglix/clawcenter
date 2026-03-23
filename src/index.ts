@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { startServer, type ServerOptions } from "./server.js";
 import { setDebug } from "./logger.js";
+import { sendSystemNotification } from "./notify.js";
 
 const program = new Command();
 
@@ -73,6 +74,25 @@ program
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+  });
+
+program
+  .command("notify")
+  .description("Send a direct WeChat system notification using ClawCenter's configured account")
+  .requiredOption("--text <text>", "Notification text")
+  .option("--data-dir <path>", "Data directory")
+  .option("--wechat-id <id>", "Target WeChat account id")
+  .option("--user-id <id>", "Target WeChat user id")
+  .option("--dry-run", "Resolve the target without sending")
+  .action(async (options) => {
+    const result = await sendSystemNotification({
+      dataDir: options.dataDir,
+      text: options.text,
+      wechatId: options.wechatId,
+      userId: options.userId,
+      dryRun: !!options.dryRun,
+    });
+    console.log(JSON.stringify(result, null, 2));
   });
 
 program.parse();
