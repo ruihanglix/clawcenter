@@ -10,15 +10,51 @@ import { HttpAgentAdapter } from "./http-agent.js";
 import { WorkerAgentAdapter, type WorkerSendFn } from "./worker-agent.js";
 import type { Store } from "../db/store.js";
 import { EventEmitter } from "node:events";
+import { homedir } from "node:os";
+import path from "node:path";
 
 const DEFAULT_CODEX_PERMISSION_MODE = "dangerously-skip-permissions";
+const PATH_CONFIG_KEYS = ["cwd", "cliPath", "opencodePath"] as const;
 
-function normalizeAgentConfig(type: AgentType, config?: AgentConfig): AgentConfig | undefined {
-  if (type !== "codex") {
-    return config;
+function normalizePathValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
 
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed === "~") {
+    return homedir();
+  }
+
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.join(homedir(), trimmed.slice(2));
+  }
+
+  return trimmed;
+}
+
+function normalizeAgentConfig(type: AgentType, config?: AgentConfig): AgentConfig | undefined {
   const next = { ...(config ?? {}) };
+  for (const key of PATH_CONFIG_KEYS) {
+    const normalized = normalizePathValue(next[key]);
+    if (normalized) {
+      next[key] = normalized;
+    } else {
+      delete next[key];
+    }
+  }
+
+  if (type !== "codex") {
+    if (!config && Object.keys(next).length === 0) {
+      return config;
+    }
+    return next;
+  }
+
   const permissionMode = typeof next.permissionMode === "string" ? next.permissionMode.trim() : "";
   if (!permissionMode) {
     next.permissionMode = DEFAULT_CODEX_PERMISSION_MODE;
