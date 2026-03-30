@@ -177,6 +177,7 @@ export class WechatConnector extends EventEmitter {
   ): Promise<void> {
     let buf = initialBuf;
     let consecutiveFailures = 0;
+    let lastTransientError = "";
     const signal = this.abortController!.signal;
 
     while (this.running && !signal.aborted) {
@@ -190,6 +191,12 @@ export class WechatConnector extends EventEmitter {
         const resp: GetUpdatesResponse = await getUpdates({ baseUrl, token, get_updates_buf: buf, timeoutMs: 38_000 });
         debug("Connector", `[${this.accountId}] getUpdates: ret=${resp.ret}, errcode=${resp.errcode}, msgs=${resp.msgs?.length ?? 0}, buf=${!!resp.get_updates_buf}`);
 
+        if (consecutiveFailures > 0) {
+          console.log(`[WechatConnector:${this.accountId}] Poll recovered after ${consecutiveFailures} consecutive failure(s)`);
+          consecutiveFailures = 0;
+          lastTransientError = "";
+        }
+
         // API error handling
         const isError = (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0);
         if (isError) {
@@ -198,21 +205,27 @@ export class WechatConnector extends EventEmitter {
             this.pausedUntil = Date.now() + SESSION_PAUSE_MS;
             this.emit("session_expired", this.accountId);
             consecutiveFailures = 0;
+            lastTransientError = "";
             continue;
           }
 
           consecutiveFailures++;
-          console.error(`[WechatConnector:${this.accountId}] getUpdates error: ret=${resp.ret} errcode=${resp.errcode}`);
+          const apiErrorKey = `ret=${resp.ret} errcode=${resp.errcode}`;
+          if (consecutiveFailures === 1 || apiErrorKey !== lastTransientError || consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            console.error(
+              `[WechatConnector:${this.accountId}] getUpdates error: ${apiErrorKey} (consecutive=${consecutiveFailures})`,
+            );
+            lastTransientError = apiErrorKey;
+          }
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             consecutiveFailures = 0;
+            lastTransientError = "";
             await sleep(BACKOFF_DELAY_MS, signal);
           } else {
             await sleep(RETRY_DELAY_MS, signal);
           }
           continue;
         }
-
-        consecutiveFailures = 0;
 
         if (resp.get_updates_buf) {
           buf = resp.get_updates_buf;
@@ -262,9 +275,16 @@ export class WechatConnector extends EventEmitter {
       } catch (err) {
         if (signal.aborted) return;
         consecutiveFailures++;
-        console.error(`[WechatConnector:${this.accountId}] Poll error:`, (err as Error).message);
+        const message = (err as Error).message;
+        if (consecutiveFailures === 1 || message !== lastTransientError || consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error(
+            `[WechatConnector:${this.accountId}] Poll error: ${message} (consecutive=${consecutiveFailures})`,
+          );
+          lastTransientError = message;
+        }
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           consecutiveFailures = 0;
+          lastTransientError = "";
           await sleep(BACKOFF_DELAY_MS, signal);
         } else {
           await sleep(RETRY_DELAY_MS, signal);

@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Store } from "../core/db/store.js";
 import type { AgentManager } from "../core/agents/manager.js";
 import { Router, PermissionError } from "./router/engine.js";
 import { isSystemCommand, handleSystemCommand } from "./commands/system-commands.js";
-import { WechatConnector, type InboundMessage } from "./wechat/connector.js";
+import { WechatConnector, type InboundMessage, type MediaItemInfo } from "./wechat/connector.js";
 
 export interface DispatcherEvents {
   log: (entry: LogEntry) => void;
@@ -16,6 +20,19 @@ export interface LogEntry {
   userId?: string;
   agentId?: string;
   text: string;
+}
+
+interface SavedInboundAttachment {
+  type: MediaItemInfo["type"];
+  path: string;
+  fileName?: string;
+  voiceText?: string;
+}
+
+interface PreparedInboundMedia {
+  attachments: SavedInboundAttachment[];
+  mediaPath?: string;
+  recordPath?: string;
 }
 
 export class Dispatcher extends EventEmitter {
@@ -104,6 +121,8 @@ export class Dispatcher extends EventEmitter {
   }
 
   private async handleMessage(connector: WechatConnector, msg: InboundMessage): Promise<void> {
+    const inboundMedia = await this.prepareInboundMedia(connector, msg);
+
     this.emitLog({
       type: "inbound",
       wechatId: msg.wechatAccountId,
@@ -120,6 +139,7 @@ export class Dispatcher extends EventEmitter {
       user_id: msg.fromUserId,
       direction: "inbound",
       content: msg.text,
+      media_path: inboundMedia?.recordPath,
     });
 
     // System commands
@@ -198,11 +218,14 @@ export class Dispatcher extends EventEmitter {
     await connector.sendTypingIndicator(msg.fromUserId, true);
 
     try {
+      const agentMessage = buildMessageWithAttachments(route.body, inboundMedia);
+
       // Send to agent
       const result = await this.agentManager.sendToAgent(route.agentId, {
         sessionId: route.sessionId,
         agentSessionId: route.agentSessionId,
-        message: route.body,
+        message: agentMessage,
+        mediaPath: inboundMedia?.mediaPath,
         onStream: (chunk) => {
           this.emitLog({
             type: "outbound",
@@ -299,6 +322,48 @@ export class Dispatcher extends EventEmitter {
     }
   }
 
+  private async prepareInboundMedia(
+    connector: WechatConnector,
+    msg: InboundMessage,
+  ): Promise<PreparedInboundMedia | undefined> {
+    if (msg.mediaItems.length === 0) {
+      return undefined;
+    }
+
+    const attachments: SavedInboundAttachment[] = [];
+    for (const item of msg.mediaItems) {
+      if (!item.media) {
+        continue;
+      }
+
+      try {
+        const buffer = await connector.downloadMedia(item.media);
+        const filePath = await persistInboundAttachment(item, buffer);
+        attachments.push({
+          type: item.type,
+          path: filePath,
+          fileName: item.fileName,
+          voiceText: item.voiceText,
+        });
+      } catch (err) {
+        console.error(
+          `[Dispatcher] Failed to persist inbound ${item.type} from ${msg.fromUserId}:`,
+          err,
+        );
+      }
+    }
+
+    if (attachments.length === 0) {
+      return undefined;
+    }
+
+    return {
+      attachments,
+      mediaPath: attachments[0].path,
+      recordPath: attachments[0].path,
+    };
+  }
+
   private emitLog(entry: Omit<LogEntry, "time">): void {
     this.emit("log", { ...entry, time: Date.now() } as LogEntry);
   }
@@ -319,4 +384,62 @@ function chunkText(text: string, maxLen: number): string[] {
     remaining = remaining.slice(splitAt);
   }
   return chunks;
+}
+
+function buildMessageWithAttachments(text: string, inboundMedia?: PreparedInboundMedia): string {
+  if (!inboundMedia || inboundMedia.attachments.length === 0) {
+    return text;
+  }
+
+  const lines = ["[WeChat attachments]"];
+  inboundMedia.attachments.forEach((attachment, index) => {
+    const parts = [`${index + 1}.`, attachment.type];
+    if (attachment.fileName) {
+      parts.push(`"${attachment.fileName}"`);
+    }
+    parts.push(`saved at ${attachment.path}`);
+    if (index === 0) {
+      parts.push("(primary attachment)");
+    }
+    lines.push(parts.join(" "));
+    if (attachment.voiceText?.trim()) {
+      lines.push(`voice transcript: ${attachment.voiceText.trim()}`);
+    }
+  });
+
+  const attachmentBlock = lines.join("\n");
+  const trimmed = text.trim();
+  return trimmed ? `${trimmed}\n\n${attachmentBlock}` : attachmentBlock;
+}
+
+async function persistInboundAttachment(item: MediaItemInfo, buffer: Buffer): Promise<string> {
+  const dir = path.join(tmpdir(), "clawcenter", "inbound");
+  await mkdir(dir, { recursive: true });
+
+  const fallbackName = `${item.type}${defaultExtensionForMediaType(item.type)}`;
+  const requestedName = item.fileName?.trim() || fallbackName;
+  const safeName = sanitizeFileName(path.basename(requestedName)) || fallbackName;
+  const fileName = `${Date.now()}-${randomUUID()}-${safeName}`;
+  const filePath = path.join(dir, fileName);
+
+  await writeFile(filePath, buffer);
+  return filePath;
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[_\.]+|[_\.]+$/g, "").slice(0, 120);
+}
+
+function defaultExtensionForMediaType(type: MediaItemInfo["type"]): string {
+  switch (type) {
+    case "image":
+      return ".jpg";
+    case "voice":
+      return ".mp3";
+    case "video":
+      return ".mp4";
+    case "file":
+    default:
+      return ".bin";
+  }
 }
