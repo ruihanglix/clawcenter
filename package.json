@@ -1,6 +1,6 @@
 {
   "name": "clawcenter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Central router bridging multiple WeChat accounts to multiple AI agents",
   "type": "module",
   "bin": {
