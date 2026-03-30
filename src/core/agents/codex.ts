@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentAdapter, AgentConfig, ModelInfo, SendParams, SendResult } from "./adapter.js";
@@ -10,11 +11,25 @@ const MAX_STDERR_HEAD = 4 * 1024;
 const MAX_STDERR_TAIL = 6 * 1024;
 const DEFAULT_PERMISSION_MODE = "dangerously-skip-permissions";
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+const CODEX_CONFIG_CACHE_TTL = 5_000;
 const IMAGE_PATH_PATTERNS = [
   /!\[[^\]]*]\(([^)]+)\)/g,
   /file:\/\/[^\s)"'`]+/g,
   /(?:^|[\s("'`])((?:\.{1,2}\/|~\/|\/)[^\s)"'`]+\.(?:png|jpe?g|gif|webp|bmp))/gi,
 ];
+
+interface CodexConfigSnapshot {
+  currentModel?: string;
+  currentProvider?: string;
+  models: ModelInfo[];
+}
+
+let codexConfigCache: {
+  path: string;
+  mtimeMs: number;
+  loadedAt: number;
+  snapshot: CodexConfigSnapshot;
+} | null = null;
 
 function clampTimeout(ms: unknown): number {
   const n = typeof ms === "number" ? ms : 0;
@@ -34,6 +49,184 @@ function getIdleTimeoutMs(totalTimeoutMs: number): number {
 function resolvePermissionMode(permissionMode?: string): string {
   const normalized = permissionMode?.trim();
   return normalized || DEFAULT_PERMISSION_MODE;
+}
+
+function getCodexConfigPath(): string {
+  const codexHome = process.env.CODEX_HOME?.trim();
+  return codexHome ? resolve(codexHome, "config.toml") : resolve(homedir(), ".codex", "config.toml");
+}
+
+function splitTomlPath(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === "\"") {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === "." && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) parts.push(trimmed);
+  return parts;
+}
+
+function parseTomlStringValue(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed.startsWith("\"")) {
+    let value = "";
+    let escaped = false;
+    for (let i = 1; i < trimmed.length; i += 1) {
+      const char = trimmed[i];
+      if (escaped) {
+        value += char;
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === "\"") {
+        return value.trim() || undefined;
+      }
+      value += char;
+    }
+    return undefined;
+  }
+
+  const commentIndex = trimmed.indexOf("#");
+  const value = (commentIndex === -1 ? trimmed : trimmed.slice(0, commentIndex)).trim();
+  return value || undefined;
+}
+
+function normalizeProviderName(provider?: string): string | undefined {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function inferProviderFromModel(model: string): string {
+  const normalized = model.trim().toLowerCase();
+  if (normalized.startsWith("gpt-") || normalized.startsWith("o1") || normalized.startsWith("o3") || normalized.startsWith("o4")) {
+    return "openai";
+  }
+  if (normalized.startsWith("claude")) return "anthropic";
+  if (normalized.startsWith("gemini")) return "google";
+  if (normalized.startsWith("grok")) return "xai";
+  if (normalized.startsWith("deepseek")) return "deepseek";
+  if (normalized.startsWith("qwen")) return "qwen";
+  return "codex";
+}
+
+function addModelInfo(models: ModelInfo[], seen: Set<string>, model: string | undefined, provider?: string): void {
+  const normalizedModel = model?.trim();
+  if (!normalizedModel) return;
+
+  const key = normalizedModel.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+
+  models.push({
+    id: normalizedModel,
+    provider: normalizeProviderName(provider) ?? inferProviderFromModel(normalizedModel),
+  });
+}
+
+function readCodexConfigSnapshot(): CodexConfigSnapshot {
+  const path = getCodexConfigPath();
+
+  try {
+    if (!existsSync(path)) {
+      return { models: [] };
+    }
+
+    const stat = statSync(path);
+    const now = Date.now();
+    if (
+      codexConfigCache
+      && codexConfigCache.path === path
+      && codexConfigCache.mtimeMs === stat.mtimeMs
+      && now - codexConfigCache.loadedAt < CODEX_CONFIG_CACHE_TTL
+    ) {
+      return codexConfigCache.snapshot;
+    }
+
+    const content = readFileSync(path, "utf8");
+    let currentSection: string[] = [];
+    let topLevelModel: string | undefined;
+    let reviewModel: string | undefined;
+    let topLevelProvider: string | undefined;
+    const profileModels = new Map<string, { model?: string; provider?: string }>();
+
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+
+      const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+      if (sectionMatch) {
+        currentSection = splitTomlPath(sectionMatch[1]);
+        continue;
+      }
+
+      const entryMatch = trimmed.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
+      if (!entryMatch) continue;
+
+      const [, key, rawValue] = entryMatch;
+      const value = parseTomlStringValue(rawValue);
+      if (!value) continue;
+
+      if (currentSection.length === 0) {
+        if (key === "model") topLevelModel = value;
+        if (key === "review_model") reviewModel = value;
+        if (key === "model_provider") topLevelProvider = value;
+        continue;
+      }
+
+      if (currentSection.length === 2 && currentSection[0] === "profiles") {
+        const profileName = currentSection[1];
+        const profile = profileModels.get(profileName) ?? {};
+        if (key === "model") profile.model = value;
+        if (key === "model_provider") profile.provider = value;
+        profileModels.set(profileName, profile);
+      }
+    }
+
+    const models: ModelInfo[] = [];
+    const seen = new Set<string>();
+    addModelInfo(models, seen, topLevelModel, topLevelProvider);
+    addModelInfo(models, seen, reviewModel, topLevelProvider);
+    for (const profile of profileModels.values()) {
+      addModelInfo(models, seen, profile.model, profile.provider ?? topLevelProvider);
+    }
+
+    const snapshot: CodexConfigSnapshot = {
+      currentModel: topLevelModel,
+      currentProvider: normalizeProviderName(topLevelProvider),
+      models,
+    };
+
+    codexConfigCache = {
+      path,
+      mtimeMs: stat.mtimeMs,
+      loadedAt: now,
+      snapshot,
+    };
+    return snapshot;
+  } catch {
+    return { models: [] };
+  }
 }
 
 function buildArgs(
@@ -189,15 +382,28 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   getModel(): string | undefined {
-    return this.config.model as string | undefined;
+    return (this.config.model as string | undefined) ?? readCodexConfigSnapshot().currentModel;
   }
 
   setModel(model: string): void {
     this.config.model = model;
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    return [];
+  async listModels(provider?: string): Promise<ModelInfo[]> {
+    const snapshot = readCodexConfigSnapshot();
+    const models: ModelInfo[] = [];
+    const seen = new Set<string>();
+
+    addModelInfo(models, seen, this.config.model as string | undefined, snapshot.currentProvider);
+    for (const model of snapshot.models) {
+      addModelInfo(models, seen, model.id, model.provider);
+    }
+
+    const normalizedProvider = normalizeProviderName(provider);
+    if (!normalizedProvider) {
+      return models;
+    }
+    return models.filter((model) => normalizeProviderName(model.provider) === normalizedProvider);
   }
 
   async send(params: SendParams): Promise<SendResult> {
